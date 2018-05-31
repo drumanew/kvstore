@@ -56,9 +56,13 @@ defmodule KVstore.Storage do
       Application.get_env(:kvstore, :db_file)
       |> open_tab.()
 
-    state = %{ tab: tab }
+    state =
+      %{ tab: tab }
+      |> do_delete_aged
+      |> do_init_times
+      |> do_init_age_timer
 
-    do_delete_aged(state)
+    { :ok, state }
   end
 
   def handle_call(:available, _from, state) do
@@ -160,6 +164,23 @@ defmodule KVstore.Storage do
       _ -> IO.puts "#{deleted} aged entries deleted"
     end
 
-    { :ok, state }
+    state
+  end
+
+  defp do_init_times(state = %{ tab: tab }) do
+    ## FIXME
+    reduce =
+      fn ({ key, _, time }, acc) ->
+        :gb_trees.insert(time, key, acc)
+      end
+
+    times = :dets.foldl(reduce, :gb_trees.empty(), tab)
+
+    Map.put(state, :times, times)
+  end
+
+  defp do_init_age_timer(state) do
+    ## TODO
+    state
   end
 end
