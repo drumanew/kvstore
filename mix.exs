@@ -15,7 +15,7 @@ defmodule KVstore.Mixfile do
   # Type "mix help compile.app" for more information
   def application do
     [
-      applications: [:logger, :cowboy, :plug],
+      applications: [:logger, :cowboy],
       mod: {KVstore, []}
     ]
   end
@@ -31,8 +31,9 @@ defmodule KVstore.Mixfile do
   # Type "mix help deps" for more examples and options
   defp deps do
     [
-      {:plug, "~> 1.3.3"},
-      {:cowboy, "~> 1.1.2"}
+      {:cowboy, "~> 1.1.2"},
+      {:poison, "~> 3.1"},
+      {:ex2ms, "~> 1.0"}
     ]
   end
 end

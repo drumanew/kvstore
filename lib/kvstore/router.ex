@@ -2,6 +2,8 @@
 
 defmodule KVstore.Router do
   def build_routes do
+    api_endpoint = Application.get_env(:kvstore, :api_endpoint)
+
     :cowboy_router.compile([
       # match on all hostnames
       { :'_',
@@ -11,9 +13,9 @@ defmodule KVstore.Router do
         # being { PathMatch, Handler, Options }
         [
 
-          # When a request is sent to "/api/v1/kvstore/", pass the request to
+          # When a request is sent to this endpoint, pass the request to
           # handler defined in module KVstore.RequestHandler
-          { "/api/v1/kvstore/[:key]/", KVstore.RequestHandler, [] }
+          { "#{api_endpoint}/[:key]/", KVstore.RequestHandler, [] }
         ]
       }
     ])
