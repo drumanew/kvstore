@@ -6,10 +6,16 @@ defmodule KVstore.Utils do
   end
 
   def from_json(json) do
+    listify =
+      fn
+        (list) when is_list(list) -> list;
+        (other) -> [other]
+      end
+
     replace =
       fn (map, key) ->
-        { val, map2 } = Map.pop(map, key)
-        Map.put(map2, String.to_atom(key), val)
+        { val, map } = Map.pop(map, key)
+        Map.put(map, String.to_atom(key), val)
       end
 
     replace_all =
@@ -22,6 +28,7 @@ defmodule KVstore.Utils do
 
     json
     |> Poison.Parser.parse!
+    |> listify.()
     |> Enum.map(replace_all)
   end
 

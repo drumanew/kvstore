@@ -1,12 +1,16 @@
 defmodule KVstore.RequestHandler do
+  ## Implements cowboy_rest
+
   def init({ :tcp, :http }, req, opts) do
     { :upgrade, :protocol, :cowboy_rest, req, opts }
   end
 
   def rest_init(req, _opts) do
-    { key, req2 } = :cowboy_req.binding(:key, req)
+    { key, req } = :cowboy_req.binding(:key, req)
+    { method, req } = :cowboy_req.method(req)
+    { body_length, req } = :cowboy_req.body_length(req)
 
-    { :ok, req2, %{ key: key } }
+    { :ok, req, %{ key: key, method: method, body_length: body_length } }
   end
 
   def rest_terminate(_req, _state) do
@@ -59,15 +63,39 @@ defmodule KVstore.RequestHandler do
     { [{ "application/json", :from_json }], req, state }
   end
 
-  def from_json(req, state) do
-    { :ok, body, req2 } = :cowboy_req.body(req)
+  def from_json(req, state = %{ key: :undefined }) do
+    { :ok, body, req } = :cowboy_req.body(req)
 
-    result = :ok ==
-      body
-      |> KVstore.Utils.from_json
-      |> KVstore.Storage.set
+    try do
+      result = :ok ==
+        body
+        |> KVstore.Utils.from_json
+        |> KVstore.Storage.set
 
-    { result, req2, state }
+      { result, req, state }
+    rescue
+      _ -> { false, req, state }
+    end
+  end
+
+  def from_json(req, state = %{ key: key }) do
+    { :ok, body, req } = :cowboy_req.body(req)
+
+    try do
+      data =
+        body
+        |> KVstore.Utils.from_json
+
+      result =
+        case data do
+          [%{ key: ^key }] -> :ok == KVstore.Storage.set(data);
+          _                -> false
+        end
+
+      { result, req, state }
+    rescue
+      _ -> { false, req, state }
+    end
   end
 
   def delete_resource(req, state = %{ key: :undefined }) do
@@ -76,6 +104,21 @@ defmodule KVstore.RequestHandler do
 
   def delete_resource(req, state = %{ key: key }) do
     result = :ok == KVstore.Storage.delete(key)
+
     { result, req, state }
+  end
+
+  def malformed_request(req, state = %{ method: "POST",
+                                        body_length: :undefined }) do
+    { true, req, state }
+  end
+
+  def malformed_request(req, state = %{ method: "POST",
+                                        body_length: 0 }) do
+    { true, req, state }
+  end
+
+  def malformed_request(req, state) do
+    { false, req, state }
   end
 end
