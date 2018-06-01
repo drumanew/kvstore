@@ -136,6 +136,10 @@ defmodule KVstore.Storage do
     { :noreply, state }
   end
 
+  def handle_info({ :timeout, ref, time }, state = %{ ref: ref, await: time }) do
+    { :noreply, do_handle_timeout(state) }
+  end
+
   def handle_info(_info, state) do
     { :noreply, state }
   end
@@ -168,19 +172,69 @@ defmodule KVstore.Storage do
   end
 
   defp do_init_times(state = %{ tab: tab }) do
-    ## FIXME
+    append_value =
+      fn (key, value, tree) ->
+        case :gb_trees.lookup(key, tree) do
+          :none ->
+            :gb_trees.insert(key, MapSet.new([value]), tree);
+          {:value, oldvalue} ->
+            :gb_trees.insert(key, MapSet.put(oldvalue, value), tree)
+        end
+      end
+
     reduce =
       fn ({ key, _, time }, acc) ->
-        :gb_trees.insert(time, key, acc)
+        append_value.(time, key, acc)
       end
 
     times = :dets.foldl(reduce, :gb_trees.empty(), tab)
 
-    Map.put(state, :times, times)
+    state
+    |> Map.put(:times, times)
+    |> Map.put(:ref, :undefined)
+    |> Map.put(:await, :undefined)
   end
 
-  defp do_init_age_timer(state) do
-    ## TODO
-    state
+  defp do_init_age_timer(state = %{ times: times, await: await, ref: ref }) do
+    if :gb_trees.size(times) > 0 do
+      { time, _keys } = :gb_trees.smallest(times)
+      if time < await || await == :undefined do
+        ref = update_age_timer(time, ref)
+        state
+        |> Map.put(:ref, ref)
+        |> Map.put(:await, time)
+      else
+        state
+      end
+    else
+      state
+    end
+  end
+
+  defp update_age_timer(time, ref) do
+    if :erlang.is_reference(ref) do
+      :erlang.cancel_timer(ref)
+    end
+    now = :erlang.system_time(:second)
+    delay = if time < now do 0 else time - now end
+    :erlang.start_timer(delay*1000, :erlang.self(), time)
+  end
+
+  defp do_handle_timeout(state = %{ tab: tab, times: times, await: await }) do
+    case :gb_trees.lookup(await, times) do
+      { :value, keys } ->
+         times = :gb_trees.delete(await, times)
+         for key <- keys do
+           :ok = :dets.delete(tab, key)
+           IO.puts("aged item deleted, key: #{key}")
+         end
+
+         state
+         |> Map.put(:times, times)
+         |> Map.put(:await, :undefined)
+         |> Map.put(:ref, :undefined);
+      _ ->
+         state
+    end |> do_init_age_timer()
   end
 end
