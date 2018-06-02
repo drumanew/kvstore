@@ -69,15 +69,42 @@ defmodule KVstore.Storage do
     { :reply, :true, state }
   end
 
-  def handle_call({ :set, data }, _from, state = %{ tab: tab }) do
+  def handle_call({ :set, data }, _from, state = %{ tab: tab, times: times }) do
     now = :erlang.system_time(:second)
 
     transform = &({ &1.key, &1.value, &1.ttl + now })
     insert = &:dets.insert(tab, &1)
 
-    reply =
+    items =
       data
       |> Enum.map(transform)
+
+    IO.puts("insert #{inspect items}")
+
+    append_value =
+      fn (key, value, tree) ->
+        case :gb_trees.lookup(key, tree) do
+          :none ->
+            :gb_trees.insert(key, MapSet.new([value]), tree);
+          {:value, oldvalue} ->
+            :gb_trees.update(key, MapSet.put(oldvalue, value), tree)
+        end
+      end
+
+    reduce =
+      fn ({ key, _, time }, acc) ->
+        append_value.(time, key, acc)
+      end
+
+    times = :lists.foldl(reduce, times, items)
+
+    state =
+      state
+      |> Map.put(:times, times)
+      |> do_init_age_timer
+
+    reply =
+      items
       |> insert.()
 
     { :reply, reply, state }
@@ -225,6 +252,7 @@ defmodule KVstore.Storage do
       { :value, keys } ->
          times = :gb_trees.delete(await, times)
          for key <- keys do
+           # TODO: check time before delete
            :ok = :dets.delete(tab, key)
            IO.puts("aged item deleted, key: #{key}")
          end
