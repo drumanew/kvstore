@@ -10,8 +10,9 @@ use Mix.Config
 
 # You can configure for your application as:
 #
-    config :kvstore, db_file: '/tmp/kvstore.db',
-                     api_endpoint: "/api/v1/kvstore/"
+    config :kvstore, db_file: "/tmp/kvstore.db",
+                     api_endpoint: "/api/v1/kvstore/",
+                     port: 8080
 #
 # And access this configuration in your application as:
 #

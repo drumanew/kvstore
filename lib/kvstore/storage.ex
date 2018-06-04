@@ -59,6 +59,7 @@ defmodule KVstore.Storage do
 
     { :ok, tab } =
       Application.get_env(:kvstore, :db_file)
+      |> :erlang.binary_to_list
       |> open_tab.()
 
     state =
