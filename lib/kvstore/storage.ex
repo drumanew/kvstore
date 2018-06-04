@@ -4,6 +4,11 @@ defmodule KVstore.Storage do
   use GenServer
 
   ## API
+  def test do
+    KVstore.Storage
+    |> :sys.get_state
+    |> Map.put(:now, :erlang.system_time(:second))
+  end
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, [name: __MODULE__])
@@ -69,7 +74,9 @@ defmodule KVstore.Storage do
     { :reply, :true, state }
   end
 
-  def handle_call({ :set, data }, _from, state = %{ tab: tab, times: times }) do
+  def handle_call({ :set, data }, _from, state = %{ tab: tab,
+                                                    times: times,
+                                                    ref: ref }) do
     now = :erlang.system_time(:second)
 
     transform = &({ &1.key, &1.value, &1.ttl + now })
@@ -82,12 +89,30 @@ defmodule KVstore.Storage do
     IO.puts("insert #{inspect items}")
 
     append_value =
-      fn (key, value, tree) ->
-        case :gb_trees.lookup(key, tree) do
+      fn (time, key, times) ->
+        times = case :dets.lookup(tab, key) do
+          [{ ^key, _, oldtime }] ->
+            case :gb_trees.lookup(oldtime, times) do
+              :none ->
+                # Bug
+                times;
+              { :value, keyset } ->
+                keyset = MapSet.delete(keyset, key)
+                if MapSet.size(keyset) == 0 do
+                  :gb_trees.delete(oldtime, times)
+                else
+                  :gb_trees.update(oldtime, keyset, times)
+                end
+            end
+          [] ->
+            times
+        end
+
+        case :gb_trees.lookup(time, times) do
           :none ->
-            :gb_trees.insert(key, MapSet.new([value]), tree);
-          {:value, oldvalue} ->
-            :gb_trees.update(key, MapSet.put(oldvalue, value), tree)
+            :gb_trees.insert(time, MapSet.new([key]), times);
+          { :value, oldkeys } ->
+            :gb_trees.update(time, MapSet.put(oldkeys, key), times)
         end
       end
 
@@ -101,6 +126,8 @@ defmodule KVstore.Storage do
     state =
       state
       |> Map.put(:times, times)
+      |> Map.put(:await, :undefined)
+      |> Map.put(:ref, stop_timer(ref))
       |> do_init_age_timer
 
     reply =
@@ -127,8 +154,15 @@ defmodule KVstore.Storage do
     { :reply, reply, state }
   end
 
-  def handle_call(:clear, _from, state = %{ tab: tab }) do
+  def handle_call(:clear, _from, state = %{ tab: tab, ref: ref }) do
     reply = :dets.delete_all_objects(tab)
+
+    state =
+      state
+      |> Map.put(:await, :undefined)
+      |> Map.put(:ref, stop_timer(ref))
+      |> Map.put(:times, :gb_trees.empty())
+      |> do_init_age_timer
 
     { :reply, reply, state }
   end
@@ -149,8 +183,34 @@ defmodule KVstore.Storage do
     { :reply, reply, state }
   end
 
-  def handle_call({ :delete, key }, _from, state = %{ tab: tab }) do
+  def handle_call({ :delete, key }, _from, state = %{ tab: tab,
+                                                      times: times,
+                                                      ref: ref }) do
+    times = case :dets.lookup(tab, key) do
+      [{ ^key, _, time }] ->
+        case :gb_trees.lookup(time, times) do
+          :none ->
+            times;
+          { :value, keys } ->
+            keys = MapSet.delete(keys, key)
+            if MapSet.size(keys) == 0 do
+              :gb_trees.delete(time, times)
+            else
+              :gb_trees.update(time, keys, times)
+            end
+        end
+      _ ->
+        times
+    end
+
     reply = :dets.delete(tab, key)
+
+    state =
+      state
+      |> Map.put(:times, times)
+      |> Map.put(:await, :undefined)
+      |> Map.put(:ref, stop_timer(ref))
+      |> do_init_age_timer
 
     { :reply, reply, state }
   end
@@ -238,10 +298,17 @@ defmodule KVstore.Storage do
     end
   end
 
+  defp stop_timer(ref) when is_reference(ref) do
+    :erlang.cancel_timer(ref)
+    :undefined
+  end
+
+  defp stop_timer(_) do
+    :undefined
+  end
+
   defp update_age_timer(time, ref) do
-    if :erlang.is_reference(ref) do
-      :erlang.cancel_timer(ref)
-    end
+    stop_timer(ref)
     now = :erlang.system_time(:second)
     delay = if time < now do 0 else time - now end
     :erlang.start_timer(delay*1000, :erlang.self(), time)
